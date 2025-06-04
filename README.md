@@ -26,7 +26,7 @@ This is an end-to-end **retail sales forecasting and analytics project** using *
 ## 🖼 Dashboard Preview
 
 ### 📊 Sales Overview (Page 1)
-![Sales Overview](images/sales_overview.png)
+[![Sales Overview](images/sales_overview.png)](https://github.com/AdityaBarakoti1998/retail-sales-forecasting-walmart/blob/main/images/Walmart%20Sales%20Overview.png)
 
 
 ### 🏬 Store Performance
