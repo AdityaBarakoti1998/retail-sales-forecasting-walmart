@@ -1,0 +1,623 @@
+=================================================================
+LAB EXAM CODE - SPRING BOOT
+1. Monolithic App with Security + Role Based Access (RBAC)
+2. Microservices with Eureka + RestTemplate
+=================================================================
+
+
+#################################################################
+PART 1: MONOLITHIC SPRING BOOT - SECURITY + RBAC
+#################################################################
+
+-----------------------------------------------------------------
+FILE: pom.xml (dependencies)
+-----------------------------------------------------------------
+<dependencies>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-security</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>com.mysql</groupId>
+        <artifactId>mysql-connector-j</artifactId>
+        <scope>runtime</scope>
+    </dependency>
+</dependencies>
+
+
+-----------------------------------------------------------------
+FILE: src/main/resources/application.properties
+-----------------------------------------------------------------
+server.port=8080
+
+spring.datasource.url=jdbc:mysql://localhost:3306/securitydb
+spring.datasource.username=root
+spring.datasource.password=root
+spring.datasource.driver-class-name=com.mysql.cj.jdbc.Driver
+
+spring.jpa.hibernate.ddl-auto=update
+spring.jpa.show-sql=true
+spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.MySQLDialect
+
+
+-----------------------------------------------------------------
+FILE: SecurityApplication.java (Main class)
+-----------------------------------------------------------------
+package com.cdac.security;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class SecurityApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(SecurityApplication.class, args);
+    }
+}
+
+
+-----------------------------------------------------------------
+FILE: entity/User.java
+-----------------------------------------------------------------
+package com.cdac.security.entity;
+
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+
+@Entity
+public class User {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    private String username;
+    private String password;
+    private String role; // ADMIN, MANAGER, USER
+
+    public User() {}
+
+    public User(Long id, String username, String password, String role) {
+        this.id = id;
+        this.username = username;
+        this.password = password;
+        this.role = role;
+    }
+
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
+
+    public String getUsername() { return username; }
+    public void setUsername(String username) { this.username = username; }
+
+    public String getPassword() { return password; }
+    public void setPassword(String password) { this.password = password; }
+
+    public String getRole() { return role; }
+    public void setRole(String role) { this.role = role; }
+}
+
+
+-----------------------------------------------------------------
+FILE: repository/UserRepository.java
+-----------------------------------------------------------------
+package com.cdac.security.repository;
+
+import com.cdac.security.entity.User;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.Optional;
+
+public interface UserRepository extends JpaRepository<User, Long> {
+    Optional<User> findByUsername(String username);
+}
+
+
+-----------------------------------------------------------------
+FILE: service/CustomUserDetailsService.java
+-----------------------------------------------------------------
+package com.cdac.security.service;
+
+import com.cdac.security.entity.User;
+import com.cdac.security.repository.UserRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
+import org.springframework.stereotype.Service;
+
+@Service
+public class CustomUserDetailsService implements UserDetailsService {
+
+    @Autowired
+    private UserRepository userRepository;
+
+    @Override
+    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+        User user = userRepository.findByUsername(username)
+                .orElseThrow(() -> new UsernameNotFoundException("User not found: " + username));
+
+        return org.springframework.security.core.userdetails.User
+                .builder()
+                .username(user.getUsername())
+                .password(user.getPassword())
+                .roles(user.getRole())
+                .build();
+    }
+}
+
+
+-----------------------------------------------------------------
+FILE: config/SecurityConfig.java
+-----------------------------------------------------------------
+package com.cdac.security.config;
+
+import com.cdac.security.service.CustomUserDetailsService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.authentication.AuthenticationProvider;
+import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+
+@Configuration
+@EnableWebSecurity
+@EnableMethodSecurity
+public class SecurityConfig {
+
+    @Autowired
+    private CustomUserDetailsService userDetailsService;
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+
+    @Bean
+    public AuthenticationProvider authenticationProvider() {
+        DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
+        provider.setUserDetailsService(userDetailsService);
+        provider.setPasswordEncoder(passwordEncoder());
+        return provider;
+    }
+
+    @Bean
+    public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        http
+            .csrf(AbstractHttpConfigurer::disable)
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/public/**").permitAll()
+                .requestMatchers("/admin/**").hasRole("ADMIN")
+                .requestMatchers("/manager/**").hasAnyRole("ADMIN", "MANAGER")
+                .requestMatchers("/user/**").hasAnyRole("ADMIN", "MANAGER", "USER")
+                .anyRequest().authenticated()
+            )
+            .httpBasic(Customizer.withDefaults())
+            .authenticationProvider(authenticationProvider());
+
+        return http.build();
+    }
+}
+
+
+-----------------------------------------------------------------
+FILE: config/DataLoader.java  (loads test users with encoded passwords)
+-----------------------------------------------------------------
+package com.cdac.security.config;
+
+import com.cdac.security.entity.User;
+import com.cdac.security.repository.UserRepository;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.crypto.password.PasswordEncoder;
+
+@Configuration
+public class DataLoader {
+
+    @Bean
+    public CommandLineRunner loadData(UserRepository repo, PasswordEncoder encoder) {
+        return args -> {
+            repo.save(new User(null, "admin1", encoder.encode("admin123"), "ADMIN"));
+            repo.save(new User(null, "manager1", encoder.encode("manager123"), "MANAGER"));
+            repo.save(new User(null, "user1", encoder.encode("user123"), "USER"));
+        };
+    }
+}
+
+
+-----------------------------------------------------------------
+FILE: controller/DemoController.java
+-----------------------------------------------------------------
+package com.cdac.security.controller;
+
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class DemoController {
+
+    @GetMapping("/public/hello")
+    public String publicHello() {
+        return "Public endpoint - no authentication needed";
+    }
+
+    @GetMapping("/user/profile")
+    public String userProfile() {
+        return "User profile - accessible by USER, MANAGER, ADMIN";
+    }
+
+    @GetMapping("/manager/reports")
+    @PreAuthorize("hasRole('MANAGER')")
+    public String managerReports() {
+        return "Manager reports - MANAGER only";
+    }
+
+    @GetMapping("/admin/dashboard")
+    @PreAuthorize("hasRole('ADMIN')")
+    public String adminDashboard() {
+        return "Admin dashboard - ADMIN only";
+    }
+}
+
+
+-----------------------------------------------------------------
+NOTES - PART 1 (important points for exam)
+-----------------------------------------------------------------
+- hasRole("ADMIN") internally checks for ROLE_ADMIN -> Spring Security
+  automatically adds the ROLE_ prefix, do not add it yourself in .roles().
+- @EnableMethodSecurity is required to use @PreAuthorize on controller methods.
+- Passwords must be BCrypt encoded before storing in DB.
+- SecurityFilterChain bean is the Spring Security 6+ way of configuring
+  security (replaces the older deprecated WebSecurityConfigurerAdapter).
+- httpBasic() is used here for simplicity in exam (Basic Auth via
+  username/password popup) instead of building a full login form/JWT.
+
+
+
+#################################################################
+PART 2: MICROSERVICES - EUREKA + RESTTEMPLATE
+(3 separate Spring Boot projects)
+#################################################################
+
+
+=================================================================
+PROJECT 1: EUREKA SERVER
+=================================================================
+
+-----------------------------------------------------------------
+FILE: pom.xml (dependency + spring cloud version management)
+-----------------------------------------------------------------
+<properties>
+    <java.version>17</java.version>
+    <spring-cloud.version>2023.0.3</spring-cloud.version>
+</properties>
+
+<dependencies>
+    <dependency>
+        <groupId>org.springframework.cloud</groupId>
+        <artifactId>spring-cloud-starter-netflix-eureka-server</artifactId>
+    </dependency>
+</dependencies>
+
+<dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-dependencies</artifactId>
+            <version>${spring-cloud.version}</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
+
+
+-----------------------------------------------------------------
+FILE: src/main/resources/application.properties
+-----------------------------------------------------------------
+server.port=8761
+spring.application.name=eureka-server
+
+eureka.client.register-with-eureka=false
+eureka.client.fetch-registry=false
+
+
+-----------------------------------------------------------------
+FILE: EurekaServerApplication.java (Main class)
+-----------------------------------------------------------------
+package com.cdac.eurekaserver;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.cloud.netflix.eureka.server.EnableEurekaServer;
+
+@SpringBootApplication
+@EnableEurekaServer
+public class EurekaServerApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(EurekaServerApplication.class, args);
+    }
+}
+
+
+
+=================================================================
+PROJECT 2: PRODUCT SERVICE (Producer / Service Provider)
+=================================================================
+
+-----------------------------------------------------------------
+FILE: pom.xml dependencies (+ same dependencyManagement as above)
+-----------------------------------------------------------------
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-web</artifactId>
+</dependency>
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+</dependency>
+
+
+-----------------------------------------------------------------
+FILE: src/main/resources/application.properties
+-----------------------------------------------------------------
+server.port=8081
+spring.application.name=PRODUCT-SERVICE
+
+eureka.client.service-url.defaultZone=http://localhost:8761/eureka/
+eureka.instance.prefer-ip-address=true
+
+
+-----------------------------------------------------------------
+FILE: ProductServiceApplication.java (Main class)
+-----------------------------------------------------------------
+package com.cdac.productservice;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.cloud.client.discovery.EnableEurekaClient;
+
+@SpringBootApplication
+@EnableEurekaClient
+public class ProductServiceApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(ProductServiceApplication.class, args);
+    }
+}
+
+
+-----------------------------------------------------------------
+FILE: model/Product.java
+-----------------------------------------------------------------
+package com.cdac.productservice.model;
+
+public class Product {
+
+    private int id;
+    private String name;
+    private double price;
+
+    public Product() {}
+
+    public Product(int id, String name, double price) {
+        this.id = id;
+        this.name = name;
+        this.price = price;
+    }
+
+    public int getId() { return id; }
+    public void setId(int id) { this.id = id; }
+
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
+
+    public double getPrice() { return price; }
+    public void setPrice(double price) { this.price = price; }
+}
+
+
+-----------------------------------------------------------------
+FILE: controller/ProductController.java
+-----------------------------------------------------------------
+package com.cdac.productservice.controller;
+
+import com.cdac.productservice.model.Product;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/products")
+public class ProductController {
+
+    @GetMapping("/{id}")
+    public Product getProduct(@PathVariable int id) {
+        return new Product(id, "Laptop", 55000.0);
+    }
+}
+
+
+
+=================================================================
+PROJECT 3: ORDER SERVICE (Consumer using RestTemplate)
+=================================================================
+
+-----------------------------------------------------------------
+FILE: pom.xml dependencies (same as Product Service: web + eureka-client,
++ same dependencyManagement spring-cloud-dependencies block)
+-----------------------------------------------------------------
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-web</artifactId>
+</dependency>
+<dependency>
+    <groupId>org.springframework.cloud</groupId>
+    <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+</dependency>
+
+
+-----------------------------------------------------------------
+FILE: src/main/resources/application.properties
+-----------------------------------------------------------------
+server.port=8082
+spring.application.name=ORDER-SERVICE
+
+eureka.client.service-url.defaultZone=http://localhost:8761/eureka/
+eureka.instance.prefer-ip-address=true
+
+
+-----------------------------------------------------------------
+FILE: OrderServiceApplication.java (Main class)
+-----------------------------------------------------------------
+package com.cdac.orderservice;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.cloud.client.discovery.EnableEurekaClient;
+
+@SpringBootApplication
+@EnableEurekaClient
+public class OrderServiceApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(OrderServiceApplication.class, args);
+    }
+}
+
+
+-----------------------------------------------------------------
+FILE: config/AppConfig.java (RestTemplate Bean - LoadBalanced)
+-----------------------------------------------------------------
+package com.cdac.orderservice.config;
+
+import org.springframework.cloud.client.loadbalancer.LoadBalanced;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.client.RestTemplate;
+
+@Configuration
+public class AppConfig {
+
+    @Bean
+    @LoadBalanced
+    public RestTemplate restTemplate() {
+        return new RestTemplate();
+    }
+}
+
+
+-----------------------------------------------------------------
+FILE: model/Product.java (DTO - same fields as Product Service's Product)
+-----------------------------------------------------------------
+package com.cdac.orderservice.model;
+
+public class Product {
+
+    private int id;
+    private String name;
+    private double price;
+
+    public Product() {}
+
+    public Product(int id, String name, double price) {
+        this.id = id;
+        this.name = name;
+        this.price = price;
+    }
+
+    public int getId() { return id; }
+    public void setId(int id) { this.id = id; }
+
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
+
+    public double getPrice() { return price; }
+    public void setPrice(double price) { this.price = price; }
+}
+
+
+-----------------------------------------------------------------
+FILE: controller/OrderController.java
+-----------------------------------------------------------------
+package com.cdac.orderservice.controller;
+
+import com.cdac.orderservice.model.Product;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.client.RestTemplate;
+
+@RestController
+@RequestMapping("/orders")
+public class OrderController {
+
+    @Autowired
+    private RestTemplate restTemplate;
+
+    @GetMapping("/place/{productId}")
+    public String placeOrder(@PathVariable int productId) {
+        Product product = restTemplate.getForObject(
+                "http://PRODUCT-SERVICE/products/" + productId,
+                Product.class
+        );
+        return "Order placed for: " + product.getName() + " at Rs." + product.getPrice();
+    }
+}
+
+
+
+-----------------------------------------------------------------
+RUN ORDER (important - write this in exam too)
+-----------------------------------------------------------------
+1. Start Eureka Server first        -> check http://localhost:8761
+   (dashboard should be reachable)
+2. Start Product Service             -> port 8081
+3. Start Order Service               -> port 8082
+4. Test in browser/Postman:
+   http://localhost:8082/orders/place/1
+
+   Expected output:
+   Order placed for: Laptop at Rs.55000.0
+
+
+-----------------------------------------------------------------
+NOTES - PART 2 (important points for exam)
+-----------------------------------------------------------------
+- @LoadBalanced on RestTemplate makes it Eureka-aware, so you call
+  services by their registered application name (PRODUCT-SERVICE)
+  instead of hardcoding host:port.
+- spring.application.name in each microservice's properties file is
+  the name it registers under in Eureka (must match what is used in
+  the RestTemplate URL, case-insensitive).
+- @EnableEurekaClient is technically optional in newer Spring Cloud
+  versions (auto-detected once the eureka-client dependency is on the
+  classpath), but writing it explicitly is safe and recommended for
+  exams/labs.
+- Eureka Server itself does NOT register with itself - that's why
+  register-with-eureka and fetch-registry are both set to false only
+  in the Eureka Server's properties file.
+
+=================================================================
+END OF FILE
+=================================================================
